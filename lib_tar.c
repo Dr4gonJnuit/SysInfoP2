@@ -62,7 +62,8 @@ int check_archive(int tar_fd)
         {
             next += 1; // If the size is not a multiple of 512, we need to add 1 to the next header position
         }
-        lseek(tar_fd, next * 512, SEEK_CUR);
+        next *= 512; // Since next is the number of blocks, we need to multiply it by 512 (the size of a block) to get the next header position
+        lseek(tar_fd, next, SEEK_CUR);
 
         // Check if the next header is empty
         char header_next_header[1024]; // Buffer to read the current header and the next header
@@ -97,6 +98,45 @@ int check_archive(int tar_fd)
  */
 int exists(int tar_fd, char *path)
 {
+    char buf[512]; // Buffer to read the header
+    long next = 0; // Next header position
+
+    while (1)
+    {
+        read(tar_fd, buf, 512);                     // Read the header
+        tar_header_t *header = (tar_header_t *)buf; // Parse the buffer as a tar header
+
+        // Check if the path is the same as the one in the header
+        if (strncmp(header->name, path, strlen(path)) == 0)
+        {
+            return 1;
+        }
+
+        next = TAR_INT(header->size) / 512;
+        if (TAR_INT(header->size) % 512 != 0)
+        {
+            next += 1; // If the size is not a multiple of 512, we need to add 1 to the next header position
+        }
+        next *= 512; // Since next is the number of blocks, we need to multiply it by 512 (the size of a block) to get the next header position
+        lseek(tar_fd, next, SEEK_CUR);
+
+        // Check if the next header is empty
+        char header_next_header[1024]; // Buffer to read the current header and the next header
+        read(tar_fd, header_next_header, 1024);
+        int checksum_next_header = 0;
+        for (int i = 0; i < 1024; i++)
+        {
+            checksum_next_header += header_next_header[i];
+        }
+        lseek(tar_fd, -1024, SEEK_CUR); // Go back to the current header
+
+        // If the next header is empty, we have reached the end of the archive
+        if (checksum_next_header == 0)
+        {
+            break;
+        }
+    }
+
     return 0;
 }
 
