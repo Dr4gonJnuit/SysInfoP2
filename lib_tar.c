@@ -15,8 +15,75 @@
  *         -2 if the archive contains a header with an invalid version value,
  *         -3 if the archive contains a header with an invalid checksum value
  */
-int check_archive(int tar_fd) {
-    return 0;
+int check_archive(int tar_fd)
+{
+    char buf[512]; // Buffer to read the header
+    int count = 0; // Number of non-null headers
+    long next = 0; // Next header position
+
+    while (1)
+    {
+        // Read the header
+        read(tar_fd, buf, 512);
+        // Parse the buffer as a tar header
+        tar_header_t *header = (tar_header_t *)buf;
+
+        // Check if the magic value is "ustar"
+        if (strncmp(header->magic, TMAGIC, TMAGLEN - 1) != 0)
+        {
+            return -1;
+        }
+        // Check if the version value is "00"
+        if (strncmp(header->version, TVERSION, TVERSLEN) != 0)
+        {
+            return -2;
+        }
+
+        // Check if the checksum is correct
+        int checksum = 0;
+        for (int i = 0; i < 512; i++)
+        {
+            if (i < 148 || i > 155) // The checksum field is between 148 and 155 bits
+            {
+                checksum += buf[i];
+            }
+            else
+            {
+                checksum += ' ';
+            }
+        }
+        if (TAR_INT(header->chksum) != checksum)
+        {
+            return -3;
+        }
+
+        next = TAR_INT(header->size) / 512;
+        if (TAR_INT(header->size) % 512 != 0)
+        {
+            next += 1; // If the size is not a multiple of 512, we need to add 1 to the next header position
+        }
+        lseek(tar_fd, next * 512, SEEK_CUR);
+
+        // Check if the next header is empty
+        char header_next_header[1024]; // Buffer to read the current header and the next header
+        read(tar_fd, header_next_header, 1024);
+        int checksum_next_header = 0;
+        for (int i = 0; i < 1024; i++)
+        {
+            checksum_next_header += header_next_header[i];
+        }
+        lseek(tar_fd, -1024, SEEK_CUR); // Go back to the current header
+
+        count++;
+
+        // If the next header is empty, we have reached the end of the archive
+        if (checksum_next_header == 0)
+        {
+            break;
+        }
+    }
+
+    return count;
 }
 
 /**
@@ -28,7 +95,8 @@ int check_archive(int tar_fd) {
  * @return zero if no entry at the given path exists in the archive,
  *         any other value otherwise.
  */
-int exists(int tar_fd, char *path) {
+int exists(int tar_fd, char *path)
+{
     return 0;
 }
 
@@ -41,7 +109,8 @@ int exists(int tar_fd, char *path) {
  * @return zero if no entry at the given path exists in the archive or the entry is not a directory,
  *         any other value otherwise.
  */
-int is_dir(int tar_fd, char *path) {
+int is_dir(int tar_fd, char *path)
+{
     return 0;
 }
 
@@ -54,7 +123,8 @@ int is_dir(int tar_fd, char *path) {
  * @return zero if no entry at the given path exists in the archive or the entry is not a file,
  *         any other value otherwise.
  */
-int is_file(int tar_fd, char *path) {
+int is_file(int tar_fd, char *path)
+{
     return 0;
 }
 
@@ -66,10 +136,10 @@ int is_file(int tar_fd, char *path) {
  * @return zero if no entry at the given path exists in the archive or the entry is not symlink,
  *         any other value otherwise.
  */
-int is_symlink(int tar_fd, char *path) {
+int is_symlink(int tar_fd, char *path)
+{
     return 0;
 }
-
 
 /**
  * Lists the entries at a given path in the archive.
@@ -93,7 +163,8 @@ int is_symlink(int tar_fd, char *path) {
  * @return zero if no directory at the given path exists in the archive,
  *         any other value otherwise.
  */
-int list(int tar_fd, char *path, char **entries, size_t *no_entries) {
+int list(int tar_fd, char *path, char **entries, size_t *no_entries)
+{
     return 0;
 }
 
@@ -115,6 +186,7 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries) {
  *         the end of the file.
  *
  */
-ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *len) {
+ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *len)
+{
     return 0;
 }
