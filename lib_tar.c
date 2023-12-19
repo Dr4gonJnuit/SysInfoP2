@@ -205,6 +205,59 @@ int is_symlink(int tar_fd, char *path)
  */
 int list(int tar_fd, char *path, char **entries, size_t *no_entries)
 {
+    char buf[512]; // Buffer to read the header
+    long next = 0; // Next header position
+
+    while (1)
+    {
+        read(tar_fd, buf, 512);                     // Read the header
+        tar_header_t *header = (tar_header_t *)buf; // Parse the buffer as a tar header
+
+        char *name = header->name;
+        if (header->typeflag == DIRTYPE) // If the entry is a directory, we need to add a '/' at the end of the name
+        {
+            strcat(name, "/");
+
+            if (*no_entries <= 0) // In case we didn't go in a directory before
+            {
+                return list(tar_fd, name, entries, no_entries + 1);
+            }
+        }
+
+        // Check if the path is the same as the one in the header
+        if (strncmp(name, path, strlen(path)) == 0)
+        {
+            if (header->typeflag == SYMTYPE)
+            {
+                
+            }
+        }
+
+        next = TAR_INT(header->size) / 512;
+        if (TAR_INT(header->size) % 512 != 0)
+        {
+            next += 1; // If the size is not a multiple of 512, we need to add 1 to the next header position
+        }
+        next *= 512; // Since next is the number of blocks, we need to multiply it by 512 (the size of a block) to get the next header position
+        lseek(tar_fd, next, SEEK_CUR);
+
+        // Check if the next header is empty
+        char header_next_header[1024]; // Buffer to read the current header and the next header
+        read(tar_fd, header_next_header, 1024);
+        int checksum_next_header = 0;
+        for (int i = 0; i < 1024; i++)
+        {
+            checksum_next_header += header_next_header[i];
+        }
+        lseek(tar_fd, -1024, SEEK_CUR); // Go back to the current header
+
+        // If the next header is empty, we have reached the end of the archive
+        if (checksum_next_header == 0)
+        {
+            break;
+        }
+    }
+
     return 0;
 }
 
@@ -228,5 +281,66 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries)
  */
 ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *len)
 {
-    return 0;
+    char buf[512];
+    long next = 0;
+
+    while (1)
+    {
+        read(tar_fd, buf, 512);
+        tar_header_t *header = (tar_header_t *)buf;
+
+        if (strncmp(header->name, path, strlen(path)) == 0)
+        {
+            if (header->typeflag != REGTYPE)
+            {
+                return -1;
+            }
+
+            if (offset > TAR_INT(header->size))
+            {
+                return -2;
+            }
+
+            if (offset == 0)
+            {
+                read(tar_fd, dest, TAR_INT(header->size));
+                *len = TAR_INT(header->size);
+                return 0;
+            }
+            else
+            {
+                lseek(tar_fd, offset, SEEK_CUR);
+                read(tar_fd, dest, TAR_INT(header->size) - offset);
+                *len = TAR_INT(header->size) - offset;
+                return TAR_INT(header->size) - offset;
+            }
+        }
+
+        next = TAR_INT(header->size) / 512;
+        if (TAR_INT(header->size) % 512 != 0)
+        {
+            next += 1; // If the size is not a multiple of 512, we need to add 1 to the next header position
+        }
+        next *= 512; // Since next is the number of blocks, we need to multiply it by 512 (the size of a block) to get the next header position
+        lseek(tar_fd, next, SEEK_CUR);
+
+        // Check if the next header is empty
+        char header_next_header[1024]; // Buffer to read the current header and the next header
+        read(tar_fd, header_next_header, 1024);
+        int checksum_next_header = 0;
+        for (int i = 0; i < 1024; i++)
+        {
+            checksum_next_header += header_next_header[i];
+        }
+        lseek(tar_fd, -1024, SEEK_CUR); // Go back to the current header
+
+        // If the next header is empty, we have reached the end of the archive
+        if (checksum_next_header == 0)
+        {
+            break;
+        }
+    }
+    
+
+    return -1;
 }
