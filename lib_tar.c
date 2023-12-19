@@ -207,6 +207,7 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries)
 {
     char buf[512]; // Buffer to read the header
     long next = 0; // Next header position
+    int count = -1; // Number of entries
 
     while (1)
     {
@@ -227,10 +228,7 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries)
         // Check if the path is the same as the one in the header
         if (strncmp(name, path, strlen(path)) == 0)
         {
-            if (header->typeflag == SYMTYPE)
-            {
-                
-            }
+            count++;
         }
 
         next = TAR_INT(header->size) / 512;
@@ -258,7 +256,13 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries)
         }
     }
 
-    return 0;
+    if (count == -1)
+    {
+        count++;
+    }
+    
+    *no_entries = count;
+    return *no_entries;
 }
 
 /**
