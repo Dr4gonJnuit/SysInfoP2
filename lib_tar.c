@@ -149,8 +149,33 @@ int exists(int tar_fd, char *path)
  * @return zero if no entry at the given path exists in the archive or the entry is not a directory,
  *         any other value otherwise.
  */
-int is_dir(int tar_fd, char *path)
-{
+int is_dir(int tar_fd, char *path) {
+
+    lseek(tar_fd,0,SEEK_SET);
+
+    char bufer[512];
+    
+    long pass = 0; int final = 0;
+
+    while (!final) {
+
+        read(tar_fd, bufer, 512);
+        tar_header_t *ahead = (tar_header_t *) bufer;
+
+        if (strncmp(ahead->name, path, strlen(path)) == 0) {
+
+            if(ahead->typeflag == DIRTYPE){return 1;}
+
+            return 0;
+        }
+
+        pass = TAR_INT(ahead->size) / 512;
+        pass += TAR_INT(ahead->size) % 512 != 0;
+
+        lseek(tar_fd, pass * 512, SEEK_CUR);
+
+        final = checkEnd(tar_fd);
+    }
     return 0;
 }
 
@@ -163,8 +188,33 @@ int is_dir(int tar_fd, char *path)
  * @return zero if no entry at the given path exists in the archive or the entry is not a file,
  *         any other value otherwise.
  */
-int is_file(int tar_fd, char *path)
-{
+int is_file(int tar_fd, char *path) {
+    
+    lseek(tar_fd,0,SEEK_SET);
+
+    char bufer[512];
+
+    long pass = 0;  int final = 0;
+
+    while(!final) {
+
+        read(tar_fd, bufer, 512);
+        tar_header_t *ahead = (tar_header_t *) bufer;
+
+        if (strncmp(ahead->name, path, strlen(path)) == 0) {
+
+            if(ahead->typeflag == REGTYPE || ahead->typeflag == AREGTYPE){return 1;}
+
+            return 0;
+        }
+
+        pass = TAR_INT(ahead->size) / 512; //number of full 512 block
+        pass += TAR_INT(ahead->size) % 512 != 0; //number of not full blocks
+
+        lseek(tar_fd, pass * 512, SEEK_CUR);
+
+        final = checkEnd(tar_fd);
+    }
     return 0;
 }
 
@@ -176,8 +226,33 @@ int is_file(int tar_fd, char *path)
  * @return zero if no entry at the given path exists in the archive or the entry is not symlink,
  *         any other value otherwise.
  */
-int is_symlink(int tar_fd, char *path)
-{
+int is_symlink(int tar_fd, char *path) {
+
+    lseek(tar_fd,0,SEEK_SET);
+
+    char bufer[512];
+
+    long pass = 0; int final = 0;
+
+    while(!final) {
+
+        read(tar_fd, bufer, 512);
+        tar_header_t *ahead = (tar_header_t *) bufer;
+
+        if (strncmp(ahead->name, path, strlen(path)) == 0) {
+
+            if(ahead->typeflag == SYMTYPE){ return 1;}
+
+            return 0;
+        }
+
+        pass = TAR_INT(ahead->size) / 512; //number of full 512 block
+        pass += TAR_INT(ahead->size) % 512 != 0; //number of not full blocks
+  
+        lseek(tar_fd, pass * 512, SEEK_CUR);
+
+        final = checkEnd(tar_fd);
+    }
     return 0;
 }
 
