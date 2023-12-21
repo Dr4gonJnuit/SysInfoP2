@@ -1,6 +1,52 @@
 #include "lib_tar.h"
 
 /**
+ * @brief Verifies if we are at the end of the archive
+ *
+ * @param tar_fd A file descriptor pointing to the start of a valid tar archive file.
+ * @return int 1 if we are at the end of the archive, 0 otherwise
+ */
+int check_end(int tar_fd)
+{
+    char header_next_header[1024]; // Buffer to read the current header and the next header
+    read(tar_fd, header_next_header, 1024);
+    int checksum_next_header = 0;
+    for (int i = 0; i < 1024; i++)
+    {
+        checksum_next_header += header_next_header[i];
+    }
+    lseek(tar_fd, -1024, SEEK_CUR); // Go back to the current header
+
+    // If the next header is empty, we have reached the end of the archive
+    if (checksum_next_header == 0)
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+/**
+ * @brief Go to the next header
+ *
+ * @param header The current header
+ * @return int The number of bytes to go to the next header
+ */
+int next_header(tar_header_t *header)
+{
+    int next = 0;
+
+    next = TAR_INT(header->size) / 512;
+    if (TAR_INT(header->size) % 512 != 0)
+    {
+        next += 1; // If the size is not a multiple of 512, we need to add 1 to the next header position
+    }
+    next *= 512; // Since next is the number of blocks, we need to multiply it by 512 (the size of a block) to get the next header position
+
+    return next;
+}
+
+/**
  * Checks whether the archive is valid.
  *
  * Each non-null header of a valid archive has:
@@ -21,7 +67,9 @@ int check_archive(int tar_fd)
     int count = 0; // Number of non-null headers
     long next = 0; // Next header position
 
-    while (1)
+    int final = 0;
+
+    while (!final)
     {
         // Read the header
         read(tar_fd, buf, 512);
@@ -57,31 +105,12 @@ int check_archive(int tar_fd)
             return -3;
         }
 
-        next = TAR_INT(header->size) / 512;
-        if (TAR_INT(header->size) % 512 != 0)
-        {
-            next += 1; // If the size is not a multiple of 512, we need to add 1 to the next header position
-        }
-        next *= 512; // Since next is the number of blocks, we need to multiply it by 512 (the size of a block) to get the next header position
+        next = next_header(header);
         lseek(tar_fd, next, SEEK_CUR);
 
-        // Check if the next header is empty
-        char header_next_header[1024]; // Buffer to read the current header and the next header
-        read(tar_fd, header_next_header, 1024);
-        int checksum_next_header = 0;
-        for (int i = 0; i < 1024; i++)
-        {
-            checksum_next_header += header_next_header[i];
-        }
-        lseek(tar_fd, -1024, SEEK_CUR); // Go back to the current header
+        final = check_end(tar_fd);
 
         count++;
-
-        // If the next header is empty, we have reached the end of the archive
-        if (checksum_next_header == 0)
-        {
-            break;
-        }
     }
 
     return count;
@@ -101,7 +130,9 @@ int exists(int tar_fd, char *path)
     char buf[512]; // Buffer to read the header
     long next = 0; // Next header position
 
-    while (1)
+    int final = 0;
+
+    while (!final)
     {
         read(tar_fd, buf, 512);                     // Read the header
         tar_header_t *header = (tar_header_t *)buf; // Parse the buffer as a tar header
@@ -112,29 +143,10 @@ int exists(int tar_fd, char *path)
             return 1;
         }
 
-        next = TAR_INT(header->size) / 512;
-        if (TAR_INT(header->size) % 512 != 0)
-        {
-            next += 1; // If the size is not a multiple of 512, we need to add 1 to the next header position
-        }
-        next *= 512; // Since next is the number of blocks, we need to multiply it by 512 (the size of a block) to get the next header position
+        next = next_header(header);
         lseek(tar_fd, next, SEEK_CUR);
 
-        // Check if the next header is empty
-        char header_next_header[1024]; // Buffer to read the current header and the next header
-        read(tar_fd, header_next_header, 1024);
-        int checksum_next_header = 0;
-        for (int i = 0; i < 1024; i++)
-        {
-            checksum_next_header += header_next_header[i];
-        }
-        lseek(tar_fd, -1024, SEEK_CUR); // Go back to the current header
-
-        // If the next header is empty, we have reached the end of the archive
-        if (checksum_next_header == 0)
-        {
-            break;
-        }
+        final = check_end(tar_fd);
     }
 
     return 0;
@@ -149,33 +161,34 @@ int exists(int tar_fd, char *path)
  * @return zero if no entry at the given path exists in the archive or the entry is not a directory,
  *         any other value otherwise.
  */
-int is_dir(int tar_fd, char *path) {
-
-    lseek(tar_fd,0,SEEK_SET);
-
+int is_dir(int tar_fd, char *path)
+{
     char bufer[512];
-    
-    long pass = 0; int final = 0;
 
-    while (!final) {
+    long next = 0;
+    int final = 0;
 
+    while (!final)
+    {
         read(tar_fd, bufer, 512);
-        tar_header_t *ahead = (tar_header_t *) bufer;
+        tar_header_t *header = (tar_header_t *)bufer;
 
-        if (strncmp(ahead->name, path, strlen(path)) == 0) {
-
-            if(ahead->typeflag == DIRTYPE){return 1;}
+        if (strncmp(header->name, path, strlen(path)) == 0)
+        {
+            if (header->typeflag == DIRTYPE)
+            {
+                return 1;
+            }
 
             return 0;
         }
 
-        pass = TAR_INT(ahead->size) / 512;
-        pass += TAR_INT(ahead->size) % 512 != 0;
+        next = next_header(header);
+        lseek(tar_fd, next, SEEK_CUR);
 
-        lseek(tar_fd, pass * 512, SEEK_CUR);
-
-        final = checkEnd(tar_fd);
+        final = check_end(tar_fd);
     }
+
     return 0;
 }
 
@@ -188,32 +201,32 @@ int is_dir(int tar_fd, char *path) {
  * @return zero if no entry at the given path exists in the archive or the entry is not a file,
  *         any other value otherwise.
  */
-int is_file(int tar_fd, char *path) {
-    
-    lseek(tar_fd,0,SEEK_SET);
-
+int is_file(int tar_fd, char *path)
+{
     char bufer[512];
 
-    long pass = 0;  int final = 0;
+    long next = 0;
+    int final = 0;
 
-    while(!final) {
-
+    while (!final)
+    {
         read(tar_fd, bufer, 512);
-        tar_header_t *ahead = (tar_header_t *) bufer;
+        tar_header_t *header = (tar_header_t *)bufer;
 
-        if (strncmp(ahead->name, path, strlen(path)) == 0) {
-
-            if(ahead->typeflag == REGTYPE || ahead->typeflag == AREGTYPE){return 1;}
+        if (strncmp(header->name, path, strlen(path)) == 0)
+        {
+            if (header->typeflag == REGTYPE || header->typeflag == AREGTYPE)
+            {
+                return 1;
+            }
 
             return 0;
         }
 
-        pass = TAR_INT(ahead->size) / 512; //number of full 512 block
-        pass += TAR_INT(ahead->size) % 512 != 0; //number of not full blocks
+        next = next_header(header);
+        lseek(tar_fd, next, SEEK_CUR);
 
-        lseek(tar_fd, pass * 512, SEEK_CUR);
-
-        final = checkEnd(tar_fd);
+        final = check_end(tar_fd);
     }
     return 0;
 }
@@ -226,33 +239,35 @@ int is_file(int tar_fd, char *path) {
  * @return zero if no entry at the given path exists in the archive or the entry is not symlink,
  *         any other value otherwise.
  */
-int is_symlink(int tar_fd, char *path) {
-
-    lseek(tar_fd,0,SEEK_SET);
-
+int is_symlink(int tar_fd, char *path)
+{
     char bufer[512];
 
-    long pass = 0; int final = 0;
+    long next = 0;
+    int final = 0;
 
-    while(!final) {
-
+    while (!final)
+    {
         read(tar_fd, bufer, 512);
-        tar_header_t *ahead = (tar_header_t *) bufer;
+        tar_header_t *header = (tar_header_t *)bufer;
 
-        if (strncmp(ahead->name, path, strlen(path)) == 0) {
+        if (strncmp(header->name, path, strlen(path)) == 0)
+        {
 
-            if(ahead->typeflag == SYMTYPE){ return 1;}
+            if (header->typeflag == SYMTYPE)
+            {
+                return 1;
+            }
 
             return 0;
         }
 
-        pass = TAR_INT(ahead->size) / 512; //number of full 512 block
-        pass += TAR_INT(ahead->size) % 512 != 0; //number of not full blocks
-  
-        lseek(tar_fd, pass * 512, SEEK_CUR);
+        next = next_header(header);
+        lseek(tar_fd, next, SEEK_CUR);
 
-        final = checkEnd(tar_fd);
+        final = check_end(tar_fd);
     }
+
     return 0;
 }
 
@@ -278,13 +293,15 @@ int is_symlink(int tar_fd, char *path) {
  * @return zero if no directory at the given path exists in the archive,
  *         any other value otherwise.
  */
-int list(int tar_fd, char *path, char **entries, size_t *no_entries)
+int list(int tar_fd, char *path, char **entries, size_t *no_entries) // -> doesn't work
 {
-    char buf[512]; // Buffer to read the header
-    long next = 0; // Next header position
+    char buf[512];  // Buffer to read the header
+    long next = 0;  // Next header position
     int count = -1; // Number of entries
 
-    while (1)
+    int final = 0;
+
+    while (!final)
     {
         read(tar_fd, buf, 512);                     // Read the header
         tar_header_t *header = (tar_header_t *)buf; // Parse the buffer as a tar header
@@ -306,36 +323,17 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries)
             count++;
         }
 
-        next = TAR_INT(header->size) / 512;
-        if (TAR_INT(header->size) % 512 != 0)
-        {
-            next += 1; // If the size is not a multiple of 512, we need to add 1 to the next header position
-        }
-        next *= 512; // Since next is the number of blocks, we need to multiply it by 512 (the size of a block) to get the next header position
+        next = next_header(header);
         lseek(tar_fd, next, SEEK_CUR);
 
-        // Check if the next header is empty
-        char header_next_header[1024]; // Buffer to read the current header and the next header
-        read(tar_fd, header_next_header, 1024);
-        int checksum_next_header = 0;
-        for (int i = 0; i < 1024; i++)
-        {
-            checksum_next_header += header_next_header[i];
-        }
-        lseek(tar_fd, -1024, SEEK_CUR); // Go back to the current header
-
-        // If the next header is empty, we have reached the end of the archive
-        if (checksum_next_header == 0)
-        {
-            break;
-        }
+        final = check_end(tar_fd);
     }
 
     if (count == -1)
     {
         count++;
     }
-    
+
     *no_entries = count;
     return *no_entries;
 }
@@ -358,68 +356,58 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries)
  *         the end of the file.
  *
  */
-ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *len)
+ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *len) // -> doesn't terminate his execution
 {
     char buf[512];
     long next = 0;
 
-    while (1)
+    int final = 0;
+
+    while (!final)
     {
         read(tar_fd, buf, 512);
         tar_header_t *header = (tar_header_t *)buf;
 
         if (strncmp(header->name, path, strlen(path)) == 0)
         {
-            if (header->typeflag != REGTYPE)
+            if (header->typeflag == DIRTYPE || !(header->typeflag == REGTYPE || header->typeflag == AREGTYPE)) // If the entry is a directory or not a file, we need to return -1
             {
                 return -1;
             }
-
-            if (offset > TAR_INT(header->size))
+            if (header->typeflag == SYMTYPE) // If the entry is a symlink, we need to resolve it so it's not complete
+            {
+                path = header->linkname;
+                if (strstr(header->name, path) != NULL)
+                {
+                    return read_file(tar_fd, header->linkname, offset, dest, len);
+                }
+                else // Jump to jmp if symlink
+                {
+                    goto jmp_symlink;
+                }
+            }
+            ssize_t size = TAR_INT(header->size);
+            if (offset > size) // If the offset is outside the file total length, we need to return -2
             {
                 return -2;
             }
-
-            if (offset == 0)
+            lseek(tar_fd, offset, SEEK_CUR); // Go to the offset position
+            if ((size - offset) < *len)      // If the remaining bytes to read are less than the size of the buffer, we need to return the remaining bytes
             {
-                read(tar_fd, dest, TAR_INT(header->size));
-                *len = TAR_INT(header->size);
-                return 0;
+                *len = size - offset;
             }
-            else
-            {
-                lseek(tar_fd, offset, SEEK_CUR);
-                read(tar_fd, dest, TAR_INT(header->size) - offset);
-                *len = TAR_INT(header->size) - offset;
-                return TAR_INT(header->size) - offset;
-            }
+            read(tar_fd, dest, *len); // Read the file
+            return (size - offset) - *len;
         }
+        // jmp if symlink
+    jmp_symlink:
 
-        next = TAR_INT(header->size) / 512;
-        if (TAR_INT(header->size) % 512 != 0)
-        {
-            next += 1; // If the size is not a multiple of 512, we need to add 1 to the next header position
-        }
-        next *= 512; // Since next is the number of blocks, we need to multiply it by 512 (the size of a block) to get the next header position
+        // Check the number of bytes to read
+        next = next_header(header);
         lseek(tar_fd, next, SEEK_CUR);
 
-        // Check if the next header is empty
-        char header_next_header[1024]; // Buffer to read the current header and the next header
-        read(tar_fd, header_next_header, 1024);
-        int checksum_next_header = 0;
-        for (int i = 0; i < 1024; i++)
-        {
-            checksum_next_header += header_next_header[i];
-        }
-        lseek(tar_fd, -1024, SEEK_CUR); // Go back to the current header
-
-        // If the next header is empty, we have reached the end of the archive
-        if (checksum_next_header == 0)
-        {
-            break;
-        }
+        final = check_end(tar_fd);
     }
-    
 
     return -1;
 }
