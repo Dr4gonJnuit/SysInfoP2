@@ -295,9 +295,12 @@ int is_symlink(int tar_fd, char *path)
  */
 int list(int tar_fd, char *path, char **entries, size_t *no_entries) // -> doesn't work
 {
+    lseek(tar_fd, 0, SEEK_SET); // Go back to the beginning of the archive if we called list() before
+
     char buf[512];  // Buffer to read the header
     long next = 0;  // Next header position
     int count = -1; // Number of entries
+    int home = 0;   // The position of the deepest directory we went in
 
     int final = 0;
 
@@ -307,20 +310,58 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries) // -> doesn
         tar_header_t *header = (tar_header_t *)buf; // Parse the buffer as a tar header
 
         char *name = header->name;
-        if (header->typeflag == DIRTYPE) // If the entry is a directory, we need to add a '/' at the end of the name
+        if (header->typeflag == SYMTYPE) // If the entry is a symlink, we need to add a '/' at the end of the name
         {
             strcat(name, "/");
-
-            if (*no_entries <= 0) // In case we didn't go in a directory before
-            {
-                return list(tar_fd, name, entries, no_entries + 1);
-            }
         }
 
         // Check if the path is the same as the one in the header
         if (strncmp(name, path, strlen(path)) == 0)
         {
-            count++;
+            if (header->typeflag == SYMTYPE) // If the entry is a symlink, we need to resolve it
+            {
+                if (count == -1) // In case we didn't go in a directory before
+                {
+                    return list(tar_fd, header->linkname, entries, no_entries);
+                }
+            }
+
+            // We need to remember the deepest directory we went in
+            int depth = 0;
+            for (int i = 0; i < strlen(header->name); ++i)
+            {
+                if (header->name[i] == '/')
+                {
+                    depth = i;
+                }
+            }
+            if (count == -1) // In case we didn't go in a directory before
+            {
+                home = depth;
+                count++;
+            }
+            else
+            {
+                if (depth > home) // If we went deeper in the directory, we need to add the entry
+                {
+                    if (header->name[depth + 1] == '\0') // If the name ends with a '/', we need to add the entry
+                    {
+                        if (count < *no_entries) // If we still have space in the array, we add the entry
+                        {
+                            memcpy(entries[count], name, strlen(name));
+                            count++;
+                        }
+                    }
+                }
+                else
+                {
+                    if (count < *no_entries) // If we still have space in the array, we add the entry
+                    {
+                        memcpy(entries[count], name, strlen(name));
+                        count++;
+                    }
+                }
+            }
         }
 
         next = next_header(header);
@@ -336,6 +377,73 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries) // -> doesn
 
     *no_entries = count;
     return *no_entries;
+}
+
+/**
+ * @brief Reads a symlink at a given path in the archive. Same as read_file() but for symlinks.
+ *
+ * @param tar_fd A file descriptor pointing to the start of a valid tar archive file.
+ * @param path A path to an entry in the archive to read from. In this function, the path is always a symlink.
+ * @param offset An offset in the file from which to start reading from, zero indicates the start of the file.
+ * @param dest A destination buffer to read the given file into.
+ * @param len An in-out argument.
+ *            The caller set it to the size of dest.
+ *            The callee set it to the number of bytes written to dest.
+ *
+ * @return -1 if no entry at the given path exists in the archive or the entry is not a file,
+ *         -2 if the offset is outside the file total length,
+ *         zero if the file was read in its entirety into the destination buffer,
+ *         a positive value if the file was partially read, representing the remaining bytes left to be read to reach
+ *         the end of the file.
+ *
+ */
+ssize_t read_symlink(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *len)
+{
+    char buf[512];
+    long next = 0;
+
+    int final = 0;
+
+    while (!final)
+    {
+        read(tar_fd, buf, 512);
+        tar_header_t *header = (tar_header_t *)buf;
+
+        if (strstr(header->name, path) != NULL) // If the path is in the name, we need to read the file
+        {
+            // Check the flags
+            if (header->typeflag == DIRTYPE || !(header->typeflag == REGTYPE || header->typeflag == AREGTYPE)) // If the entry is a directory or not a file, we need to return -1
+            {
+                return -1;
+            }
+            if (header->typeflag == SYMTYPE) // If the entry is a symlink, we need to resolve it
+            {
+                return read_symlink(tar_fd, header->linkname, offset, dest, len);
+            }
+
+            // Check the offset
+            ssize_t size = TAR_INT(header->size);
+            if (offset > size) // If the offset is outside the file total length, we need to return -2
+            {
+                return -2;
+            }
+            lseek(tar_fd, offset, SEEK_CUR); // Go to the offset position
+            if ((size - offset) < *len)      // If the remaining bytes to read are less than the size of the buffer, we need to return the remaining bytes
+            {
+                *len = size - offset;
+            }
+            read(tar_fd, dest, *len); // Read the file
+            return (size - offset) - *len;
+        }
+
+        // Check the number of bytes to read
+        next = next_header(header);
+        lseek(tar_fd, next, SEEK_CUR);
+
+        final = check_end(tar_fd);
+    }
+
+    return -1;
 }
 
 /**
@@ -356,7 +464,7 @@ int list(int tar_fd, char *path, char **entries, size_t *no_entries) // -> doesn
  *         the end of the file.
  *
  */
-ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *len) // -> doesn't terminate his execution
+ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *len)
 {
     char buf[512];
     long next = 0;
@@ -370,22 +478,21 @@ ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *
 
         if (strncmp(header->name, path, strlen(path)) == 0)
         {
-            if (header->typeflag == DIRTYPE || !(header->typeflag == REGTYPE || header->typeflag == AREGTYPE)) // If the entry is a directory or not a file, we need to return -1
+            // Check the flags
+            if (header->typeflag == DIRTYPE) // If the entry is a directory, we need to return -1
             {
                 return -1;
             }
-            if (header->typeflag == SYMTYPE) // If the entry is a symlink, we need to resolve it so it's not complete
+            if (header->typeflag == SYMTYPE) // If the entry is a symlink, we need to resolve it
             {
-                path = header->linkname;
-                if (strstr(header->name, path) != NULL)
-                {
-                    return read_file(tar_fd, header->linkname, offset, dest, len);
-                }
-                else // Jump to jmp if symlink
-                {
-                    goto jmp_symlink;
-                }
+                return read_symlink(tar_fd, header->linkname, offset, dest, len);
             }
+            if (!(header->typeflag == REGTYPE || header->typeflag == AREGTYPE)) // If the entry is not a file, we need to return -1
+            {
+                return -1;
+            }
+
+            // Check the offset
             ssize_t size = TAR_INT(header->size);
             if (offset > size) // If the offset is outside the file total length, we need to return -2
             {
@@ -399,8 +506,6 @@ ssize_t read_file(int tar_fd, char *path, size_t offset, uint8_t *dest, size_t *
             read(tar_fd, dest, *len); // Read the file
             return (size - offset) - *len;
         }
-        // jmp if symlink
-    jmp_symlink:
 
         // Check the number of bytes to read
         next = next_header(header);
